@@ -54,7 +54,7 @@ def render():
             
             # Get prog id
             prog_idx = prog_display.index(selected_prog_str)
-            prog_id = df_prog.iloc[prog_idx]['id']
+            prog_id = int(df_prog.iloc[prog_idx]['id'])
             
             st.markdown(f"**2. Enter Marks for: {selected_prog_str}**")
             # Prepare Dataframe

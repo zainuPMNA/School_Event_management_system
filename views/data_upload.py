@@ -52,6 +52,16 @@ def render():
         with col2:
             with st.expander("📄 Bulk Upload (Excel/CSV)", expanded=False):
                 st.info("Your file should have columns: Name, Class, Division, Gender, Category, Group. (Column names are case-insensitive).")
+                
+                student_template = pd.DataFrame(columns=["Name", "Class", "Division", "Gender", "Category", "Group"])
+                st.download_button(
+                    label="📥 Download CSV Template",
+                    data=student_template.to_csv(index=False).encode('utf-8'),
+                    file_name="student_template.csv",
+                    mime="text/csv",
+                    key='dl_student_template'
+                )
+                
                 uploaded_student_file = st.file_uploader("Upload Student List", type=['xlsx', 'csv'], key='student_file')
                 if uploaded_student_file is not None:
                     try:
@@ -157,6 +167,16 @@ def render():
         with col4:
             with st.expander("📄 Bulk Upload (Excel/CSV)", expanded=False):
                 st.info("Your file should have columns: Name, Type, Category, Gender. For Arts Individual events, add a 'Stage Type' column (On-stage / Off-stage).")
+                
+                program_template = pd.DataFrame(columns=["Name", "Type", "Category", "Gender", "Stage Type"])
+                st.download_button(
+                    label="📥 Download CSV Template",
+                    data=program_template.to_csv(index=False).encode('utf-8'),
+                    file_name="program_template.csv",
+                    mime="text/csv",
+                    key='dl_program_template'
+                )
+                
                 uploaded_program_file = st.file_uploader("Upload Program List", type=['xlsx', 'csv'], key='program_file')
                 if uploaded_program_file is not None:
                     try:
@@ -341,6 +361,15 @@ def render():
 
         with st.expander("📄 Bulk Upload Group Teams (Excel/CSV)", expanded=False):
             st.info("Your CSV should have EXACT Columns: GROUP, GENDER, CHEST NO:, PROGRAM LEADER NAME, NUMBER OF PARTICIPANTS, NAME OF PARTICIPANTS. (Multiple participant names should be separated by commas).")
+            
+            team_template = pd.DataFrame(columns=["GROUP", "GENDER", "CHEST NO:", "PROGRAM LEADER NAME", "NUMBER OF PARTICIPANTS", "NAME OF PARTICIPANTS"])
+            st.download_button(
+                label="📥 Download CSV Template",
+                data=team_template.to_csv(index=False).encode('utf-8'),
+                file_name="group_teams_template.csv",
+                mime="text/csv",
+                key='dl_team_template'
+            )
         
         # We need Category, but it's not in their requested CSV columns. So we select it here:
         upload_cat = st.selectbox("Select Category for this CSV File (Since it's not in the CSV columns)", categories, key="bulk_upload_cat")

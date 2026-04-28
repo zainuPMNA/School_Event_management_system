@@ -8,7 +8,7 @@ st.set_page_config(page_title="School Event Management App", page_icon="🏅", l
 init_db()
 
 # Lazy import views to avoid circular dependencies and issues with DB init
-from views import settings, data_upload, scoring, dashboards, certificates, downloads, schedule, data_refactory, about
+from views import settings, data_upload, scoring, dashboards, certificates, downloads, schedule, data_refactory, about, user_manual
 
 def main():
     st.sidebar.title("🏅 Event Manager")
@@ -36,6 +36,7 @@ def main():
         "💾 Data Refactory Center": data_refactory.render,
         "⚙️ Settings": settings.render,
         "🖨️ Downloads & Prints": downloads.render,
+        "📖 User Manual": user_manual.render,
         "ℹ️ About": about.render
     }
     

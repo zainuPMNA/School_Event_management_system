@@ -312,7 +312,7 @@ def render():
                         WHERE ip.program_id = ?
                         ORDER BY s.chest_number ASC
                         """
-                        df_participants = run_query(query, (prog_dict['id'],))
+                        df_participants = run_query(query, (int(prog_dict['id']),))
                         
                         if df_participants.empty:
                             st.warning("No students have been assigned to this Individual program. Please assign them in 'Upload & Manage Data -> Individual Assignation'.")
@@ -358,7 +358,7 @@ def render():
                         GROUP BY s.chest_number, s.name, s.group_name
                         ORDER BY s.chest_number ASC
                         """
-                        df_groups = run_query(query_grp, (prog_dict['id'],))
+                        df_groups = run_query(query_grp, (int(prog_dict['id']),))
                         if df_groups.empty:
                             st.warning("No registered teams found for this group program. Please construct teams in 'Group Team Setup'.")
                         else:
