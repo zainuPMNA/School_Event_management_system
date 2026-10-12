@@ -3,7 +3,7 @@ echo ==============================================
 echo Installing requirements for Sports Management App
 echo ==============================================
 echo.
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 echo.
 echo ==============================================
 echo Installation Complete!

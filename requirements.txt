@@ -1,6 +1,6 @@
-﻿streamlit>=1.30.0
+streamlit>=1.30.0
 pandas
 openpyxl
 plotly
-
+cryptography
 python-docx
