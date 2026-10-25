@@ -1,10 +1,12 @@
 import streamlit as st
 import pandas as pd
-from database import get_connection, run_query, execute_query
+from database import run_query, execute_query, transaction, sync_rows, cleanup_orphans
+from views.ui import hero, require_admin
 
 def render():
-    st.title("📁 Upload & Manage Data")
-    st.markdown("Use this section to add Students and Event Programs to your database. You can add them one by one manually, or upload an Excel/CSV file for bulk import.")
+    hero("Upload & Manage Data", "Add students, programs, teams and assignments — one by one or from Excel/CSV.", "📁")
+    if not require_admin():
+        return
     current_mode = st.session_state.get('event_mode', 'Sports')
 
     # Fetch lookup data for dropdowns
@@ -80,11 +82,24 @@ def render():
                         db_cols = ['name', 'class_name', 'division', 'gender', 'category', 'group_name']
                         df_tocreate = df_s[[c for c in db_cols if c in df_s.columns]]
                         
-                        if st.button("Confirm & Upload Students"):
-                            conn = get_connection()
-                            df_tocreate.to_sql('students', conn, if_exists='append', index=False)
-                            conn.close()
-                            st.success(f"Successfully uploaded {len(df_tocreate)} students!")
+                        if 'name' not in df_tocreate.columns:
+                            st.error("The file needs a 'Name' column.")
+                        else:
+                            df_tocreate = df_tocreate.copy()
+                            df_tocreate['name'] = df_tocreate['name'].astype("string").str.strip()
+                            skipped = df_tocreate['name'].isna() | (df_tocreate['name'] == "")
+                            df_tocreate = df_tocreate[~skipped]
+                            for col, valid in [('gender', genders), ('category', categories), ('group_name', groups)]:
+                                if col in df_tocreate.columns:
+                                    unknown = set(df_tocreate[col].dropna().astype(str)) - set(valid)
+                                    if unknown:
+                                        st.warning(f"Unknown {col.replace('_name', '')} value(s): {', '.join(sorted(unknown))}. Add them in Settings or fix the file.")
+                            st.dataframe(df_tocreate.head(10), hide_index=True, width="stretch")
+                            st.caption(f"{len(df_tocreate)} students ready" + (f" · {int(skipped.sum())} rows without a name skipped" if skipped.any() else ""))
+                            if st.button("Confirm & Upload Students"):
+                                with transaction() as conn:
+                                    df_tocreate.to_sql('students', conn, if_exists='append', index=False)
+                                st.success(f"Successfully uploaded {len(df_tocreate)} students! Now generate chest numbers below.")
                             
                     except Exception as e:
                         st.error(f"Error reading file: {e}")
@@ -94,42 +109,67 @@ def render():
         st.subheader("Current Students Database")
         st.caption("You can edit or delete rows directly below and press save.")
         df_students = run_query("SELECT id, name, class_name, division, gender, category, group_name, chest_number FROM students")
-        edited_students = st.data_editor(df_students, hide_index=True, use_container_width=True, num_rows="dynamic", key="student_editor")
-        if st.button("Save Changes to Students", key="btn_save_students"):
-            # Clean delete & replace logic similar to settings
-            conn = get_connection()
-            conn.execute("DELETE FROM students")
-            conn.commit()
-            edited_students.to_sql("students", conn, if_exists='append', index=False)
-            conn.close()
-            st.success("Student database updated.")
+        edited_students = st.data_editor(df_students, hide_index=True, width="stretch", num_rows="dynamic", key="student_editor", disabled=["id"],
+                                         column_config={"gender": st.column_config.SelectboxColumn("gender", options=genders), "category": st.column_config.SelectboxColumn("category", options=categories), "group_name": st.column_config.SelectboxColumn("group_name", options=groups)})
+        if st.button("Save Changes to Students", key="btn_save_students", type="primary"):
+            chests = pd.to_numeric(edited_students['chest_number'], errors='coerce').dropna()
+            if chests.duplicated().any():
+                st.error(f"Duplicate chest numbers: {', '.join(str(int(c)) for c in chests[chests.duplicated()].unique())}. Each student needs a unique number.")
+            else:
+                try:
+                    with transaction() as conn:
+                        deleted = sync_rows(conn, "students", df_students, edited_students,
+                                            ["name", "class_name", "division", "gender", "category", "group_name", "chest_number"])
+                        cleanup_orphans(conn)
+                    st.success("Student database updated." + (f" Removed {len(deleted)} student(s) and their program assignments." if deleted else ""))
+                except Exception as e:
+                    st.error(f"Nothing was saved because of an error: {e}")
             
         st.markdown("---")
         st.subheader("🔢 Assign Chest Numbers")
-        st.markdown("Automatically assign sequential 3-digit chest numbers. Each group gets a distinct 100-number block (e.g., Group A: 100+, Group B: 200+).")
+        st.markdown("Automatically assign chest numbers. Each group gets its own block (e.g., Group A: 100+, Group B: 200+).")
+        renumber_all = st.checkbox("Renumber ALL students (otherwise only students without a number get one)",
+                                   help="Renumbering keeps scores and team registrations linked to the right students.")
         if st.button("Generate Chest Numbers"):
-            conn = get_connection()
-            grp_df = pd.read_sql_query("SELECT name FROM groups", conn)
-            groups_list = grp_df['name'].tolist()
-            
-            base_allocations = {g: (i+1)*100 for i, g in enumerate(groups_list)}
-            stud_df = pd.read_sql_query("SELECT id, group_name FROM students ORDER BY name ASC", conn)
-            
+            groups_list = run_query("SELECT name FROM groups ORDER BY id")['name'].tolist()
+            stud_df = run_query("SELECT id, group_name, chest_number FROM students ORDER BY name ASC")
+            block = 100
+            biggest = stud_df.groupby('group_name').size().max() if not stud_df.empty else 0
+            while biggest >= block:
+                block *= 10
+
             update_data = []
-            for g, base in base_allocations.items():
+            for i, g in enumerate(groups_list):
+                base = (i + 1) * block
                 g_students = stud_df[stud_df['group_name'] == g]
-                for offset, stud_id in enumerate(g_students['id'].tolist()):
-                    update_data.append((base + offset, stud_id))
-                    
+                taken = set() if renumber_all else set(stud_df['chest_number'].dropna().astype(int))
+                next_no = base
+                for _, row in g_students.iterrows():
+                    if not renumber_all and pd.notna(row['chest_number']):
+                        continue
+                    while next_no in taken:
+                        next_no += 1
+                    old = int(row['chest_number']) if pd.notna(row['chest_number']) else None
+                    update_data.append((next_no, int(row['id']), old))
+                    taken.add(next_no)
+                    next_no += 1
+
+            no_group = stud_df[~stud_df['group_name'].isin(groups_list)]
             if update_data:
-                c = conn.cursor()
-                c.executemany("UPDATE students SET chest_number = ? WHERE id = ?", update_data)
-                conn.commit()
-                st.success("Chest numbers generated and saved!")
-                st.rerun()
+                with transaction() as conn:
+                    # Use negative numbers as a temporary step so swapped numbers can't get mixed up
+                    for new, sid, old in update_data:
+                        conn.execute("UPDATE students SET chest_number = ? WHERE id = ?", (-new, sid))
+                        if old is not None:
+                            conn.execute("UPDATE group_participants SET leader_chest_number = ? WHERE leader_chest_number = ?", (-new, old))
+                        conn.execute("UPDATE scores SET chest_number = ? WHERE student_id = ?", (new, sid))
+                    conn.execute("UPDATE students SET chest_number = -chest_number WHERE chest_number < 0")
+                    conn.execute("UPDATE group_participants SET leader_chest_number = -leader_chest_number WHERE leader_chest_number < 0")
+                st.success(f"Assigned chest numbers to {len(update_data)} student(s)!")
             else:
-                st.info("No students found.")
-            conn.close()
+                st.info("Every student already has a chest number.")
+            if not no_group.empty:
+                st.warning(f"{len(no_group)} student(s) have a house group that isn't in Settings, so they got no number.")
 
     # ------------------ PROGRAMS TAB ------------------
     with tab2:
@@ -197,10 +237,16 @@ def render():
                             
                         df_p_tocreate = df_p[[c for c in db_cols_p if c in df_p.columns]]
                         
-                        if st.button("Confirm & Upload Programs"):
-                            conn = get_connection()
-                            df_p_tocreate.to_sql('programs', conn, if_exists='append', index=False)
-                            conn.close()
+                        missing = [c for c in ['name', 'type', 'category', 'gender'] if c not in df_p_tocreate.columns]
+                        bad_type = set(df_p_tocreate['type'].dropna().astype(str)) - {"Individual", "Group"} if 'type' in df_p_tocreate else set()
+                        if missing:
+                            st.error(f"Missing column(s): {', '.join(missing)}")
+                        elif bad_type:
+                            st.error(f"'Type' must be Individual or Group. Found: {', '.join(sorted(bad_type))}")
+                        elif st.button("Confirm & Upload Programs"):
+                            df_p_tocreate = df_p_tocreate.dropna(subset=['name'])
+                            with transaction() as conn:
+                                df_p_tocreate.to_sql('programs', conn, if_exists='append', index=False)
                             st.success(f"Successfully uploaded {len(df_p_tocreate)} programs!")
                             
                     except Exception as e:
@@ -211,16 +257,20 @@ def render():
         st.subheader(f"Current {current_mode} Programs")
         st.caption(f"Edit existing {current_mode} programs here:")
         df_programs = run_query("SELECT id, name, type, category, gender, stage_type FROM programs WHERE event_mode = ?", (current_mode,))
-        edited_programs = st.data_editor(df_programs, hide_index=True, use_container_width=True, num_rows="dynamic", key="program_editor")
-        if st.button("Save Changes to Programs", key="btn_save_programs"):
-            conn = get_connection()
-            conn.execute("DELETE FROM programs WHERE event_mode = ?", (current_mode,))
-            conn.commit()
-            df_to_save = edited_programs.copy()
-            df_to_save['event_mode'] = current_mode
-            df_to_save.to_sql("programs", conn, if_exists='append', index=False)
-            conn.close()
-            st.success(f"{current_mode} program database updated.")
+        edited_programs = st.data_editor(df_programs, hide_index=True, width="stretch", num_rows="dynamic", key="program_editor", disabled=["id"],
+                                         column_config={"type": st.column_config.SelectboxColumn("type", options=["Individual", "Group"]), "category": st.column_config.SelectboxColumn("category", options=categories), "gender": st.column_config.SelectboxColumn("gender", options=genders + ["Mixed"]), "stage_type": st.column_config.SelectboxColumn("stage_type", options=["On-stage", "Off-stage"])})
+        if st.button("Save Changes to Programs", key="btn_save_programs", type="primary"):
+            try:
+                with transaction() as conn:
+                    deleted = sync_rows(conn, "programs", df_programs, edited_programs,
+                                        ["name", "type", "category", "gender", "stage_type"],
+                                        scope_sql="AND event_mode = ?", scope_params=(current_mode,),
+                                        fixed={"event_mode": current_mode})
+                    cleanup_orphans(conn)
+                st.success(f"{current_mode} program database updated." +
+                           (f" Removed {len(deleted)} program(s) with their participants and scores." if deleted else ""))
+            except Exception as e:
+                st.error(f"Nothing was saved because of an error: {e}")
 
     # ------------------ GROUP TEAMS TAB ------------------
     with tab3:
@@ -317,12 +367,12 @@ def render():
                                         if any(n.strip() == "" for n in member_names):
                                             st.warning("Please fill in all participant names before saving, or reduce the number of participants.")
                                         else:
-                                            delete_q = "DELETE FROM group_participants WHERE program_id = ? AND leader_chest_number IN (SELECT chest_number FROM students WHERE group_name = ?)"
-                                            execute_query(delete_q, (selected_prog_id_g, selected_house_group))
-                                            for name_part in member_names:
-                                                execute_query(
+                                            with transaction() as conn:
+                                                conn.execute("DELETE FROM group_participants WHERE program_id = ? AND leader_chest_number IN (SELECT chest_number FROM students WHERE group_name = ?)",
+                                                             (selected_prog_id_g, selected_house_group))
+                                                conn.executemany(
                                                     "INSERT INTO group_participants (program_id, leader_chest_number, participant_name) VALUES (?, ?, ?)",
-                                                    (selected_prog_id_g, leader_chest, name_part.strip())
+                                                    [(selected_prog_id_g, leader_chest, n.strip()) for n in member_names]
                                                 )
                                             st.success("Team successfully registered!")
                                             st.rerun()
@@ -429,9 +479,8 @@ def render():
                         df_to_upload['leader_chest_number'] = pd.to_numeric(df_to_upload['leader_chest_number'], errors='coerce').fillna(0).astype(int)
                         
                         if st.button("Confirm & Upload Teams"):
-                            conn = get_connection()
-                            df_to_upload.to_sql('group_participants', conn, if_exists='append', index=False)
-                            conn.close()
+                            with transaction() as conn:
+                                df_to_upload.to_sql('group_participants', conn, if_exists='append', index=False)
                             st.success(f"Successfully uploaded {len(df_to_upload)} individual participants!")
                             
             except Exception as e:
@@ -453,15 +502,12 @@ def render():
         if df_group_parts.empty:
              st.info("No participants registered yet.")
         else:
-            edited_groups = st.data_editor(df_group_parts, hide_index=True, use_container_width=True, num_rows="dynamic", key="group_editor")
+            edited_groups = st.data_editor(df_group_parts, hide_index=True, width="stretch", num_rows="dynamic", key="group_editor")
             if st.button("Save Changes to Participants Database", key="btn_save_groups"):
-                conn = get_connection()
-                conn.execute("DELETE FROM group_participants WHERE program_id IN (SELECT id FROM programs WHERE event_mode = ?)", (current_mode,))
-                conn.commit()
-                # Extract only the DB columns
-                df_to_save = edited_groups[['program_id', 'leader_chest_number', 'participant_name']]
-                df_to_save.to_sql("group_participants", conn, if_exists='append', index=False)
-                conn.close()
+                df_to_save = edited_groups[['program_id', 'leader_chest_number', 'participant_name']].dropna(subset=['program_id', 'participant_name'])
+                with transaction() as conn:
+                    conn.execute("DELETE FROM group_participants WHERE program_id IN (SELECT id FROM programs WHERE event_mode = ?)", (current_mode,))
+                    df_to_save.to_sql("group_participants", conn, if_exists='append', index=False)
                 st.success("Group participants database updated.")
 
     # ------------------ INDIVIDUAL ASSIGNATION TAB ------------------
@@ -556,15 +602,12 @@ def render():
             if df_assigns.empty:
                 st.info("No individual assignations yet.")
             else:
-                edited_assigns = st.data_editor(df_assigns, hide_index=True, use_container_width=True, num_rows="dynamic", key="assigns_editor")
+                edited_assigns = st.data_editor(df_assigns, hide_index=True, width="stretch", num_rows="dynamic", key="assigns_editor")
                 if st.button("Save Changes to Assignations", key="btn_save_assigns"):
-                    conn = get_connection()
-                    conn.execute("DELETE FROM individual_participants WHERE program_id IN (SELECT id FROM programs WHERE event_mode = ?)", (current_mode,))
-                    conn.commit()
-                    df_to_save = edited_assigns[['program_id', 'student_id']]
-                    df_to_save = df_to_save.dropna()
-                    df_to_save.to_sql("individual_participants", conn, if_exists='append', index=False)
-                    conn.close()
+                    df_to_save = edited_assigns[['program_id', 'student_id']].dropna().drop_duplicates()
+                    with transaction() as conn:
+                        conn.execute("DELETE FROM individual_participants WHERE program_id IN (SELECT id FROM programs WHERE event_mode = ?)", (current_mode,))
+                        df_to_save.to_sql("individual_participants", conn, if_exists='append', index=False)
                     st.success("Individual assignations updated.")
         except Exception as e:
             st.error(f"Error loading assignations: {e}")

@@ -1,7 +1,8 @@
 import streamlit as st
+from views.ui import hero
 
 def render():
-    st.title("📖 User Manual")
+    hero("User Manual", "Step-by-step guide from setup to certificates.", "📖")
     st.markdown("Welcome to the **School Event Management App**. This guide provides a comprehensive step-by-step workflow for managing your school's sports or arts events from start to finish.")
     
     st.markdown("---")
@@ -13,8 +14,9 @@ def render():
         2. Add all **Categories** (e.g., Sub-Junior, Junior, Senior) your school uses.
         3. Add all **House Groups** (e.g., Red House, Blue House).
         4. Add all **Genders** (e.g., Boys, Girls).
-        5. Define the **Point Systems** for 1st, 2nd, and 3rd places (ensure you save these for both Individual and Group event types).
-        6. Upload the **School Logo** and configure the **Print Headers** (useful for generating official scoring sheets and certificates).
+        5. Define the **Point Values** for 1st, 2nd, 3rd (add 4th, 5th… if needed).
+        6. Fill in **Event Info** and upload the **School Logo** — shown on the sidebar, live scoreboard, certificates and every document.
+        7. *(Recommended)* Set an **Admin Password** in the 🔐 Security tab so only staff can enter scores or edit data.
         """)
         
     with st.expander("Step 2: Upload Roster & Assignations (📁 Upload & Manage Data)", expanded=False):
@@ -32,33 +34,35 @@ def render():
         With your participants and programs locked in, it's time to physically plan the event dates and times.
         1. Navigate to **🗓️ Program Schedule**.
         2. Set specific **Dates, Times, and Venues** for each program.
-        3. Print the **Judges Scoring Sheets** from this tab. You can enable 'Automatic Layouts' or 'Manual Override' modes depending on if you want the schedule generated dynamically. The PDF sheets are highly detailed and given to field judges.
+        3. Pick dates and times with the calendar/clock pickers. The app warns you if two programs are at the same venue at the same time.
+        4. Print **Judges' Scoring Sheets** from **🖨️ Downloads & Prints**.
         """)
         
     with st.expander("Step 4: Live Results & Points Evaluation (🏆 Enter Scores)", expanded=False):
         st.markdown("""
         As events wrap up and score sheets are handed back, you enter them into the system here.
         1. Navigate to **🏆 Enter Scores**.
-        2. Check the **Event Checklist** to see what events are pending scoring.
-        3. Select a completed program and assign the **1st, 2nd, and 3rd place winners** using their Chest Numbers.
-        4. The system will use your pre-configured Point Rules (from Settings) to mathematically distribute the points.
-        5. **Corrections Mode**: If a typo occurred, expand the "Corrections & Overrides" section at the bottom to easily delete an incorrect score entry and re-upload the results.
+        2. Programs marked ⏳ are still pending; ✅ means results are saved.
+        3. **Sports**: choose the place for each finisher. **Arts**: type marks (leave blank for absentees) and the app ranks them.
+        4. Points come from your Settings automatically.
+        5. **Corrections**: select the program again, fix the entry and press Save — it recalculates instantly.
         """)
         
     with st.expander("Step 5: Follow Leaderboards & Event Tracking (📊 Dashboards)", expanded=False):
         st.markdown("""
         Real-time analytics to keep track of the competition visually.
         1. Navigate to **📊 Dashboards**.
-        2. The **Overall Leaderboard** highlights group/house standings.
-        3. Use the **Category Champions** table to identify the "Champion of Champions" tracking highest individual aggregate scores.
-        4. Utilize the **Deep Dive View** tabs for specific, granular analysis per student or program.
+        2. The **Group Leaderboard** shows an animated podium and charts of house standings.
+        3. **Category-wise** shows which house leads in each category.
+        4. **Individual Champions** finds the top scorers by gender and category.
+        5. Open **📺 Live Scoreboard** on a projector — it refreshes on its own and celebrates new leaders with confetti.
         """)
         
     with st.expander("Step 6: Archiving, Reports, & Certificates (🖨️ Downloads & 🏅 Certificates)", expanded=False):
         st.markdown("""
         After all scoring is completed, fulfill administrative duties.
         1. Navigate to **🏅 Certificates**.
-        2. The system can generate massive batches of customizable PDF or raw DOCX word documents based on winner results.
+        2. Pick an event to get certificates for 1st, 2nd and 3rd place (optionally participation certificates too), then Print / Save as PDF.
         3. Navigate to **🖨️ Downloads & Prints**.
         4. Export **Winners Lists** filtered dynamically by multiple parameters (Category-wise printing or Master List outputs).
         5. Print the **Coordinators Operational Checklist** to track what still needs finalizing.
@@ -70,7 +74,8 @@ def render():
         1. Navigate to **💾 Data Refactory Center**.
         2. **Back up Database**: Click the download button for your `.enc` safe file. Save this daily. 
         3. **Restore Database**: Upload an `.enc` file to perfectly roll back in case of system emergencies.
-        4. **Clean Slate**: Use the red danger-zone buttons to wipe your system clean so it's ready for the following year's setup.
+        4. **Automatic Snapshots**: a copy is saved in `backups/` before every import or erase, and can be restored with one click.
+        5. **Clean Slate**: Use the Erase tab to wipe the system for next year's setup.
         """)
         
     st.info("💡 **Pro Tip**: Use the **Event Mode Toggle** (Sports / Arts) in the sidebar at all times! Competitions are completely silo'd between the two. Once actual event day begins, lock the toggle using the `🔒 Lock Event Mode` checkbox to stop yourself from accidentally adding Arts points to the Sports module.")

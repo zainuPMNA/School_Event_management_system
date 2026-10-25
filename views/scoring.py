@@ -1,23 +1,52 @@
+from datetime import datetime
+
 import streamlit as st
 import pandas as pd
-from database import get_connection, run_query, execute_query
+from database import run_query, transaction
+from views.ui import hero, require_admin
+
+
+def _ordinal(n):
+    n = int(n)
+    if n <= 0:
+        return ""
+    if 10 <= n % 100 <= 20:
+        return f"{n}th"
+    return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }"
+
+
+def _save_scores(prog_id, rows):
+    """rows: list of dicts with student_id, chest, label, group, position, points, mark. Atomic replace."""
+    now = datetime.now().isoformat(timespec="seconds")
+    with transaction() as conn:
+        conn.execute("DELETE FROM scores WHERE program_id = ?", (prog_id,))
+        conn.executemany(
+            """INSERT INTO scores (program_id, student_id, chest_number, student_or_group_leader, group_name,
+                                   position, points_assigned, mark, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [(prog_id, r['student_id'], r['chest'], r['label'], r['group'], r['position'],
+              r['points'], r['mark'], now) for r in rows],
+        )
+
 
 def render():
-    st.title("🏆 Enter & Manage Scores")
-    st.markdown("Record match results here. Filter the event, type the position directly into the table, and hit save!")
+    current_mode = st.session_state.get('event_mode', 'Sports')
+    hero("Enter & Manage Scores", "Pick a program, enter places or marks, and save — leaderboards update instantly.", "🏆")
+    if not require_admin():
+        return
 
     # Fetch lookup
     try:
-        df_cat = run_query("SELECT name FROM categories")
-        df_gen = run_query("SELECT name FROM genders")
-        categories = df_cat['name'].tolist() if not df_cat.empty else []
-        genders = df_gen['name'].tolist() if not df_gen.empty else []
+        categories = run_query("SELECT name FROM categories")['name'].tolist()
+        genders = run_query("SELECT name FROM genders")['name'].tolist()
     except Exception:
         categories, genders = [], []
-        
+
+    df_pts = run_query("SELECT position, points FROM points ORDER BY position")
+    pts_dict = {int(p): int(v) for p, v in zip(df_pts['position'], df_pts['points'])} if not df_pts.empty else {}
+
     st.subheader("Log a New Score")
-    current_mode = st.session_state.get('event_mode', 'Sports')
-    
+
     with st.container(border=True):
         st.markdown("**1. Filter Program**")
         c1, c2, c3 = st.columns(3)
@@ -27,264 +56,171 @@ def render():
             sel_cat = st.selectbox("Category", categories)
         with c3:
             sel_type = st.selectbox("Type", ["Individual", "Group"])
-            
+
         stage_type_filter = "All"
         if current_mode == 'Arts' and sel_type == 'Individual':
             stage_type_filter = st.selectbox("Stage Type", ["All", "On-stage", "Off-stage"])
-            
+
         if not sel_gen or not sel_cat:
             st.warning("Ensure categories and genders exist in Settings.")
             return
-            
-        # Fetch matching programs
-        query = "SELECT id, name FROM programs WHERE category=? AND gender=? AND type=? AND event_mode=?"
+
+        query = """SELECT p.id, p.name, COALESCE(p.win_condition, 'Highest') AS win_condition,
+                          (SELECT COUNT(*) FROM scores s WHERE s.program_id = p.id) AS n_scores
+                   FROM programs p WHERE category=? AND gender=? AND type=? AND event_mode=?"""
         params = [sel_cat, sel_gen, sel_type, current_mode]
-        
         if current_mode == 'Arts' and sel_type == 'Individual' and stage_type_filter != "All":
             query += " AND stage_type=?"
             params.append(stage_type_filter)
-            
-        df_prog = run_query(query, tuple(params))
-        
+        df_prog = run_query(query + " ORDER BY p.name", tuple(params))
+
         if df_prog.empty:
             st.info("No programs found matching these filters in the current mode.")
         else:
-            prog_display = [f"{r['name']}" for _, r in df_prog.iterrows()]
-            selected_prog_str = st.selectbox("Select Program", prog_display)
-            
-            # Get prog id
-            prog_idx = prog_display.index(selected_prog_str)
-            prog_id = int(df_prog.iloc[prog_idx]['id'])
-            
-            st.markdown(f"**2. Enter Marks for: {selected_prog_str}**")
-            # Prepare Dataframe
+            labels = [f"{'✅' if r['n_scores'] else '⏳'} {r['name']}" for _, r in df_prog.iterrows()]
+            prog_idx = st.selectbox("Select Program (✅ = scored, ⏳ = pending)", range(len(labels)), format_func=lambda i: labels[i])
+            prog = df_prog.iloc[prog_idx]
+            prog_id = int(prog['id'])
+            selected_prog_str = prog['name']
+
+            st.markdown(f"**2. Enter results for: {selected_prog_str}**")
+            name_col = "Participant Name" if sel_type == "Individual" else "Program Leader Name"
             if sel_type == "Individual":
-                try:
-                    count_assigned = run_query("SELECT COUNT(*) as c FROM individual_participants WHERE program_id=?", (prog_id,)).iloc[0]['c']
-                except Exception:
-                    count_assigned = 0
-                
-                if count_assigned > 0:
-                    q_part = """
-                        SELECT s.chest_number, s.name, s.group_name 
-                        FROM individual_participants ip
-                        JOIN students s ON ip.student_id = s.id
-                        WHERE ip.program_id = ?
-                    """
-                    df_part = run_query(q_part, (prog_id,))
-                    if df_part.empty:
-                        st.info("No assigned students found for this program.")
-                    else:
-                        df_part.rename(columns={'chest_number': 'Chest Number', 'name': 'Participant Name', 'group_name': 'Group'}, inplace=True)
-                else:
-                    df_part = pd.DataFrame()
+                df_part = run_query("""
+                    SELECT s.id AS student_id, s.chest_number, s.name, s.group_name
+                    FROM individual_participants ip
+                    JOIN students s ON ip.student_id = s.id
+                    WHERE ip.program_id = ?
+                    ORDER BY s.chest_number
+                """, (prog_id,))
+                if df_part.empty:
                     st.warning("⚠️ No students have been assigned to this Individual program yet. Please assign them in 'Upload & Manage Data -> Individual Assignation'.")
             else:
-                q_part = """
-                    SELECT gp.leader_chest_number, s.name, s.group_name 
+                df_part = run_query("""
+                    SELECT MIN(s.id) AS student_id, gp.leader_chest_number AS chest_number, s.name, s.group_name
                     FROM group_participants gp
                     JOIN students s ON gp.leader_chest_number = s.chest_number
                     WHERE gp.program_id = ?
-                """
-                df_part = run_query(q_part, (prog_id,))
+                    GROUP BY gp.leader_chest_number, s.name, s.group_name
+                    ORDER BY gp.leader_chest_number
+                """, (prog_id,))
                 if df_part.empty:
                     st.info("No registered teams found for this group event. Add them in Group Team Setup.")
-                else:
-                    df_part.rename(columns={'leader_chest_number': 'Chest Number', 'name': 'Program Leader Name', 'group_name': 'Group'}, inplace=True)
-                
+
             if not df_part.empty:
-                event_mode = st.session_state.get('event_mode', 'Sports')
-                
-                # Fetch default points for lookup 
-                df_pts = run_query("SELECT position, points FROM points")
-                pts_dict = dict(zip(df_pts['position'], df_pts['points'])) if not df_pts.empty else {}
-                
-                if event_mode == 'Sports':
-                    st.info("SPORTS MODE: Select '1', '2', or '3' for the winners. Unselected participants will safely receive 0 points.")
-                    
-                    df_existing = run_query("SELECT student_or_group_leader, position FROM scores WHERE program_id = ?", (prog_id,))
-                    
-                    if sel_type == "Individual":
-                        df_part['full_name'] = df_part['Participant Name'].astype(str) + " (Chest: " + df_part['Chest Number'].astype(str) + ")"
-                    else:
-                        df_part['full_name'] = df_part['Program Leader Name'].astype(str) + " (Chest: " + df_part['Chest Number'].astype(str) + ")"
-                    
-                    if not df_existing.empty:
-                        mapping_pos = dict(zip(df_existing['student_or_group_leader'], df_existing['position']))
-                        df_part['Position'] = df_part['full_name'].map(mapping_pos).fillna(0).astype(int).astype(str).replace('0', None)
-                    else:
-                        df_part['Position'] = None
-                        
-                    df_part.drop(columns=['full_name'], inplace=True)
+                df_part = df_part.rename(columns={'chest_number': 'Chest Number', 'name': name_col, 'group_name': 'Group'})
+                df_existing = run_query("SELECT student_id, chest_number, position, mark FROM scores WHERE program_id = ?", (prog_id,))
+                by_student = {int(r['student_id']): r for _, r in df_existing.iterrows() if pd.notna(r['student_id'])}
 
-                    columns_config = {
-                        "Chest Number": st.column_config.NumberColumn("Chest Number", disabled=True, format="%d"),
-                        "Participant Name": st.column_config.TextColumn("Participant Name", disabled=True),
-                        "Program Leader Name": st.column_config.TextColumn("Program Leader Name", disabled=True),
-                        "Group": st.column_config.TextColumn("House Group", disabled=True),
-                        "Position": st.column_config.SelectboxColumn("Position", options=["1", "2", "3"])
-                    }
-                    
-                    edited_df = st.data_editor(
-                        df_part, 
-                        column_config=columns_config,
-                        hide_index=True, 
-                        use_container_width=True, 
-                        key=f"editor_{prog_id}"
-                    )
-                    
+                base_cfg = {
+                    "student_id": None,  # hidden
+                    "Chest Number": st.column_config.NumberColumn("Chest Number", disabled=True, format="%d"),
+                    name_col: st.column_config.TextColumn(name_col, disabled=True),
+                    "Group": st.column_config.TextColumn("House Group", disabled=True),
+                }
+
+                def build_rows(df_to_save, positions, marks=None):
+                    rows = []
+                    for i, row in df_to_save.iterrows():
+                        pos = int(positions[i]) if pd.notna(positions[i]) else 0
+                        chest = int(row['Chest Number']) if pd.notna(row['Chest Number']) else None
+                        name = row[name_col]
+                        rows.append({
+                            'student_id': int(row['student_id']) if pd.notna(row['student_id']) else None,
+                            'chest': chest,
+                            'label': f"{name} (Chest: {chest})" if chest is not None else name,
+                            'group': row['Group'],
+                            'position': pos,
+                            'points': pts_dict.get(pos, 0) if pos > 0 else 0,
+                            'mark': float(marks[i]) if marks is not None and pd.notna(marks[i]) else None,
+                        })
+                    return rows
+
+                if current_mode == 'Sports':
+                    max_pos = max([3, len(df_part)] + list(pts_dict.keys()))
+                    pos_options = [str(i) for i in range(1, max_pos + 1)]
+                    st.info("SPORTS MODE: choose a place for each finisher. Leave blank for no place (0 points). "
+                            f"Points per place come from Settings: {', '.join(f'{_ordinal(k)}={v}' for k, v in pts_dict.items())}.")
+
+                    df_part['Position'] = [
+                        str(int(by_student[int(sid)]['position']))
+                        if int(sid) in by_student and pd.notna(by_student[int(sid)]['position']) and by_student[int(sid)]['position'] > 0
+                        else None
+                        for sid in df_part['student_id']
+                    ]
+                    cfg = dict(base_cfg, Position=st.column_config.SelectboxColumn("Position", options=pos_options))
+                    edited_df = st.data_editor(df_part, column_config=cfg, hide_index=True, width="stretch", key=f"editor_{prog_id}")
+
+                    chosen = pd.to_numeric(edited_df['Position'], errors='coerce')
+                    dupes = chosen[chosen.notna() & chosen.duplicated(keep=False)].unique()
+                    if len(dupes):
+                        st.warning(f"⚠️ More than one participant has place {', '.join(_ordinal(d) for d in sorted(dupes))}. "
+                                   "That's fine for a tie — otherwise please correct it before saving.")
+
                     if st.button("💾 Save Assigned Places", type="primary"):
-                        df_to_save = edited_df.copy()
-                        df_to_save['Position'] = df_to_save['Position'].fillna(0).astype(int)
-                        
-                        conn = get_connection()
-                        c = conn.cursor()
-                        c.execute("DELETE FROM scores WHERE program_id = ?", (int(prog_id),))
-                        
-                        inserted = 0
-                        for _, row in df_to_save.iterrows():
-                            pos = row['Position']
-                            pts = pts_dict.get(pos, 0) if pos in [1, 2, 3] else 0
-                            mark_val = 0.0 # Sports mode does not use mark
-                            grp = row['Group']
-                            
-                            student_or_leader = row['Participant Name'] if sel_type == "Individual" else row['Program Leader Name']
-                            leader_chest = row['Chest Number']
-                            full_ident = f"{student_or_leader} (Chest: {int(leader_chest)})" if pd.notna(leader_chest) else student_or_leader
-                            
-                            try:
-                                c.execute("INSERT INTO scores (program_id, student_or_group_leader, group_name, position, points_assigned, mark) VALUES (?, ?, ?, ?, ?, ?)", (int(prog_id), full_ident, grp, pos, pts, mark_val))
-                            except Exception:
-                                c.execute("INSERT INTO scores (program_id, student_or_group_leader, group_name, position, points_assigned) VALUES (?, ?, ?, ?, ?)", (int(prog_id), full_ident, grp, pos, pts))
-                            inserted += 1
-                        
-                        conn.commit()
-                        conn.close()
-                        st.success(f"Successfully tracked placements for {inserted} records!")
+                        rows = build_rows(edited_df, chosen)
+                        _save_scores(prog_id, rows)
+                        winners = [r for r in rows if r['position'] == 1]
+                        st.session_state['score_flash'] = f"Saved results for {selected_prog_str}! " + (
+                            f"🥇 {winners[0]['label']}" if winners else "")
                         st.rerun()
 
-                else: # Arts Mode
-                    st.info("ARTS MODE: The system will auto-rank based on your marks. Provide any position points (e.g. 4th, 5th) globally in Settings!")
-                    win_condition = st.radio("Win Condition (Auto-Ranking)", ["Highest Mark Wins", "Lowest Mark Wins"], horizontal=True)
-                    
-                    df_existing = run_query("SELECT student_or_group_leader, mark FROM scores WHERE program_id = ?", (prog_id,))
-                    
-                    if sel_type == "Individual":
-                        df_part['full_name'] = df_part['Participant Name'].astype(str) + " (Chest: " + df_part['Chest Number'].astype(str) + ")"
-                    else:
-                        df_part['full_name'] = df_part['Program Leader Name'].astype(str) + " (Chest: " + df_part['Chest Number'].astype(str) + ")"
-                    
-                    if not df_existing.empty:
-                        mapping_marks = dict(zip(df_existing['student_or_group_leader'], df_existing['mark']))
-                        df_part['Mark'] = df_part['full_name'].map(mapping_marks)
-                    else:
-                        df_part['Mark'] = None
-                        
-                    df_part.drop(columns=['full_name'], inplace=True)
-
-                    columns_config = {
-                        "Chest Number": st.column_config.NumberColumn("Chest Number", disabled=True, format="%d"),
-                        "Participant Name": st.column_config.TextColumn("Participant Name", disabled=True),
-                        "Program Leader Name": st.column_config.TextColumn("Program Leader Name", disabled=True),
-                        "Group": st.column_config.TextColumn("House Group", disabled=True),
-                        "Mark": st.column_config.NumberColumn("Mark (Type Score here)", min_value=0.0, step=0.01)
-                    }
-                    
-                    edited_df = st.data_editor(
-                        df_part, 
-                        column_config=columns_config,
-                        hide_index=True, 
-                        use_container_width=True, 
-                        key=f"editor_{prog_id}"
+                else:  # Arts Mode
+                    st.info("ARTS MODE: type each participant's mark. The system ranks them automatically. "
+                            "Leave the mark **blank** for anyone absent — a mark of 0 still counts.")
+                    win_condition = st.radio(
+                        "Win Condition (Auto-Ranking) — saved for this program",
+                        ["Highest Mark Wins", "Lowest Mark Wins"], horizontal=True,
+                        index=1 if prog['win_condition'] == 'Lowest' else 0, key=f"win_{prog_id}",
                     )
-                    
+                    df_part['Mark'] = [
+                        by_student[int(sid)]['mark'] if int(sid) in by_student else None for sid in df_part['student_id']
+                    ]
+                    df_part['Mark'] = pd.to_numeric(df_part['Mark'], errors='coerce')
+                    cfg = dict(base_cfg, Mark=st.column_config.NumberColumn("Mark (Type Score here)", min_value=0.0, step=0.01))
+                    edited_df = st.data_editor(df_part, column_config=cfg, hide_index=True, width="stretch", key=f"editor_{prog_id}")
+
                     if st.button("💾 Calculate & Save Scores", type="primary"):
-                        df_to_save = edited_df.copy()
-                        df_to_save['Mark'] = df_to_save['Mark'].fillna(0.0)
-                        df_ranked = df_to_save[df_to_save['Mark'] > 0].copy()
-                        
-                        if not df_ranked.empty:
-                            is_ascend = True if "Lowest" in win_condition else False
-                            df_ranked['Position'] = df_ranked['Mark'].rank(method='min', ascending=is_ascend).astype(int)
-                            
-                            df_to_save = pd.merge(df_to_save, df_ranked[['Chest Number', 'Position']], on='Chest Number', how='left')
-                            df_to_save['Position'] = df_to_save['Position'].fillna(0).astype(int)
-                        else:
-                            df_to_save['Position'] = 0
-                            
-                        conn = get_connection()
-                        c = conn.cursor()
-                        c.execute("DELETE FROM scores WHERE program_id = ?", (int(prog_id),))
-                        
-                        inserted = 0
-                        for _, row in df_to_save.iterrows():
-                            mark_val = float(row['Mark'])
-                            pos = int(row['Position'])
-                            # UNBOUNDED POINTS FOR ARTS:
-                            pts = pts_dict.get(pos, 0)
-                            grp = row['Group']
-                            
-                            student_or_leader = row['Participant Name'] if sel_type == "Individual" else row['Program Leader Name']
-                            leader_chest = row['Chest Number']
-                            full_ident = f"{student_or_leader} (Chest: {int(leader_chest)})" if pd.notna(leader_chest) else student_or_leader
-                            
-                            try:
-                                c.execute("INSERT INTO scores (program_id, student_or_group_leader, group_name, position, points_assigned, mark) VALUES (?, ?, ?, ?, ?, ?)", (int(prog_id), full_ident, grp, pos, pts, mark_val))
-                            except Exception:
-                                c.execute("INSERT INTO scores (program_id, student_or_group_leader, group_name, position, points_assigned) VALUES (?, ?, ?, ?, ?)", (int(prog_id), full_ident, grp, pos, pts))
-                            inserted += 1
-                            
-                        conn.commit()
-                        conn.close()
-                        st.success(f"Successfully calculated rankings and saved {inserted} records!")
+                        marks = pd.to_numeric(edited_df['Mark'], errors='coerce')
+                        is_ascend = "Lowest" in win_condition
+                        positions = marks.rank(method='min', ascending=is_ascend)
+                        rows = build_rows(edited_df, positions, marks)
+                        _save_scores(prog_id, rows)
+                        with transaction() as conn:
+                            conn.execute("UPDATE programs SET win_condition = ? WHERE id = ?",
+                                         ('Lowest' if is_ascend else 'Highest', prog_id))
+                        winners = sorted([r for r in rows if r['position'] > 0], key=lambda r: r['position'])
+                        st.session_state['score_flash'] = f"Ranked and saved {selected_prog_str}! " + (
+                            f"🥇 {winners[0]['label']}" if winners else "")
                         st.rerun()
+
+    if st.session_state.get('score_flash'):
+        st.success(st.session_state.pop('score_flash'))
+        st.balloons()
 
     # ------------------ HISTORY TABLE ------------------
     st.markdown("---")
     st.subheader("Score Logs (History)")
-    st.markdown("To fix a typo, simply select the Program above, correct the inputs, and press Save again to instantly recalculate.")
-    
-    query = """
-    SELECT 
-        s.id as score_id, 
-        p.name as program_name,
-        p.category as category,
-        p.type as event_type,
-        s.student_or_group_leader as participant, 
-        s.group_name, 
-        COALESCE(s.mark, 0) as mark,
-        s.position, 
-        s.points_assigned 
-    FROM scores s
-    JOIN programs p ON s.program_id = p.id
-    WHERE p.event_mode = ?
-    ORDER BY s.id DESC
-    """
-    
-    try:
-        df_scores = run_query(query, (current_mode,))
-    except Exception: # Fallback if mark doesn't exist
-        df_scores = run_query(query.replace("COALESCE(s.mark, 0) as mark,", ""), (current_mode,))
+    st.markdown("To fix a typo, select the Program above, correct the inputs, and press Save again — it recalculates instantly.")
+
+    df_scores = run_query("""
+        SELECT p.name AS program_name, p.category, p.type AS event_type,
+               COALESCE(st.name || ' (Chest: ' || s.chest_number || ')', s.student_or_group_leader) AS participant,
+               s.group_name, s.mark, s.position, s.points_assigned, s.updated_at
+        FROM scores s
+        JOIN programs p ON s.program_id = p.id
+        LEFT JOIN students st ON st.id = s.student_id
+        WHERE p.event_mode = ?
+        ORDER BY s.updated_at DESC, s.id DESC
+    """, (current_mode,))
 
     if not df_scores.empty:
-        # Auto format numeric positions to string representations
-        def format_pos(x):
-            if x == 1: return "1st"
-            if x == 2: return "2nd"
-            if x == 3: return "3rd"
-            if int(x) > 3: return f"{int(x)}th"
-            return ""
-            
-        df_scores['Rank'] = df_scores['position'].apply(format_pos)
-        
+        df_scores['Rank'] = df_scores['position'].fillna(0).apply(_ordinal)
         display_cols = ['program_name', 'category', 'event_type', 'participant', 'group_name']
-        
-        # Only show marks logically if we recorded them!
-        if 'mark' in df_scores.columns and current_mode == 'Arts':
+        if current_mode == 'Arts':
             display_cols.append('mark')
-            
-        display_cols.extend(['Rank', 'points_assigned'])
-        
+        display_cols.extend(['Rank', 'points_assigned', 'updated_at'])
+
         df_display = df_scores[display_cols].rename(columns={
             'program_name': 'Program',
             'category': 'Category',
@@ -292,9 +228,9 @@ def render():
             'participant': 'Participant',
             'group_name': 'House Group',
             'mark': 'Recorded Mark',
-            'points_assigned': 'Points'
+            'points_assigned': 'Points',
+            'updated_at': 'Saved At',
         })
-        
-        st.dataframe(df_display, hide_index=True, use_container_width=True)
+        st.dataframe(df_display, hide_index=True, width="stretch")
     else:
         st.info("No scores have been logged yet.")

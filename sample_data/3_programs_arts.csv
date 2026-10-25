@@ -1,0 +1,45 @@
+Name,Type,Category,Gender,Stage Type
+Rhymes Recitation,Individual,Kiddies,Boys,On-stage
+Colouring,Individual,Kiddies,Boys,Off-stage
+Fancy Dress,Individual,Kiddies,Boys,On-stage
+Rhymes Recitation,Individual,Kiddies,Girls,On-stage
+Colouring,Individual,Kiddies,Girls,Off-stage
+Fancy Dress,Individual,Kiddies,Girls,On-stage
+Group Song,Group,Kiddies,Mixed,
+Story Telling,Individual,Sub-Junior,Boys,On-stage
+Drawing,Individual,Sub-Junior,Boys,Off-stage
+Solo Song,Individual,Sub-Junior,Boys,On-stage
+Story Telling,Individual,Sub-Junior,Girls,On-stage
+Drawing,Individual,Sub-Junior,Girls,Off-stage
+Solo Song,Individual,Sub-Junior,Girls,On-stage
+Group Dance,Group,Sub-Junior,Mixed,
+Elocution (English),Individual,Junior,Boys,On-stage
+Solo Song,Individual,Junior,Boys,On-stage
+Drawing,Individual,Junior,Boys,Off-stage
+Handwriting,Individual,Junior,Boys,Off-stage
+Elocution (English),Individual,Junior,Girls,On-stage
+Solo Song,Individual,Junior,Girls,On-stage
+Drawing,Individual,Junior,Girls,Off-stage
+Handwriting,Individual,Junior,Girls,Off-stage
+Group Song,Group,Junior,Mixed,
+Group Dance,Group,Junior,Mixed,
+Elocution (English),Individual,Senior,Boys,On-stage
+Solo Dance,Individual,Senior,Boys,On-stage
+Essay Writing,Individual,Senior,Boys,Off-stage
+Poster Making,Individual,Senior,Boys,Off-stage
+Elocution (English),Individual,Senior,Girls,On-stage
+Solo Dance,Individual,Senior,Girls,On-stage
+Essay Writing,Individual,Senior,Girls,Off-stage
+Poster Making,Individual,Senior,Girls,Off-stage
+Skit,Group,Senior,Mixed,
+Group Dance,Group,Senior,Mixed,
+Debate,Individual,Super Senior,Boys,On-stage
+Mono Act,Individual,Super Senior,Boys,On-stage
+Essay Writing,Individual,Super Senior,Boys,Off-stage
+Photography,Individual,Super Senior,Boys,Off-stage
+Debate,Individual,Super Senior,Girls,On-stage
+Mono Act,Individual,Super Senior,Girls,On-stage
+Essay Writing,Individual,Super Senior,Girls,Off-stage
+Photography,Individual,Super Senior,Girls,Off-stage
+Skit,Group,Super Senior,Mixed,
+Quiz,Group,Super Senior,Mixed,

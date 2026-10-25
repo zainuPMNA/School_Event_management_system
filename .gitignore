@@ -3,3 +3,5 @@ __pycache__/
 sports_manager.db
 .ipynb_checkpoints/
 .DS_Store
+backups/
+*.db-journal

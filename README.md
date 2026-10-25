@@ -14,6 +14,10 @@ A comprehensive, fully-digitized web application built with Python and Streamlit
   - Generate Coordinator Operations Checklists to track event progress.
 - **Automated Certificate Generation:** Automatically generate and download printable PDF certificates for event winners.
 - **Offline Capable Database:** Uses a lightweight SQLite database for fast, reliable data storage without needing a complex server setup.
+- **📺 Live Scoreboard:** An animated, auto-refreshing house leaderboard for projectors, with a live results ticker and confetti when the leader scores.
+- **Modern Animated UI:** Gradient page headers, an animated podium, stat cards and smooth page transitions.
+- **Admin Password (optional):** Lock score entry and data editing behind a password; dashboards stay public.
+- **Safe Data Handling:** Every save is all-or-nothing, renames update everywhere, and an automatic snapshot is taken before any import or erase.
 
 ## 📸 Screenshots
 

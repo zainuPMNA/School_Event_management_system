@@ -1,8 +1,8 @@
 import streamlit as st
+from views.ui import hero
 
 def render():
-    st.title("ℹ️ About")
-    st.markdown("---")
+    hero("About", "School Event Management App", "ℹ️")
     
     col1, col2 = st.columns([2, 1])
     
@@ -20,9 +20,9 @@ def render():
 
         st.markdown("---")
         st.markdown("#### System Information")
-        st.markdown("**Version:** v1.0.0 (Stable Release)")
+        st.markdown("**Version:** v2.0.0")
         st.markdown("**Core Technologies:** Python 3")
-        st.markdown("**Frameworks & Libraries:** Streamlit, Pandas, ReportLab, DocxTemplate")
+        st.markdown("**Frameworks & Libraries:** Streamlit, Pandas, Plotly, python-docx, cryptography")
         st.markdown("**Database:** SQLite3")
         
         st.markdown("---")

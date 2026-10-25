@@ -2,56 +2,42 @@ import streamlit as st
 import pandas as pd
 import io
 from docx import Document
-from database import run_query
+from database import run_query, get_event_info
+from views.ui import hero
 
 import os
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-def generate_docx(df, title, is_judge_sheet=False, prog_row=None):
-    doc = Document()
-    
-    # Fetch event info
-    try:
-        df_info = run_query("SELECT * FROM event_info LIMIT 1")
-    except Exception:
-        df_info = pd.DataFrame()
-        
-    school_name = "Tournament"
-    sports_name = "Annual Sports Day"
-    year = ""
-    logo_path = None
-    
-    if not df_info.empty:
-        school_name = df_info['school_name'].iloc[0] if pd.notna(df_info['school_name'].iloc[0]) else school_name
-        sports_name = df_info['sports_name'].iloc[0] if pd.notna(df_info['sports_name'].iloc[0]) else sports_name
-        year = df_info['year'].iloc[0] if pd.notna(df_info['year'].iloc[0]) else year
-        logo_path = df_info['logo_path'].iloc[0] if pd.notna(df_info['logo_path'].iloc[0]) else None
+def add_doc_header(doc, title):
+    """School logo, name and event title at the top of every generated Word file."""
+    school_name, sports_name, year, logo_path = get_event_info()
 
-    # Header section
     header_para = doc.add_paragraph()
     header_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
+
     if logo_path and os.path.exists(logo_path):
         run = header_para.add_run()
         run.add_picture(logo_path, width=Inches(1.0))
         header_para.add_run("\n")
-        
+
     run = header_para.add_run(f"{school_name}\n")
     run.font.size = Pt(16)
     run.bold = True
-    
-    if year:
-        run = header_para.add_run(f"{sports_name} - {year}\n")
-    else:
-        run = header_para.add_run(f"{sports_name}\n")
+
+    run = header_para.add_run(f"{sports_name} - {year}\n" if year else f"{sports_name}\n")
     run.font.size = Pt(12)
-    
+
     header_para.add_run("\n")
     run = header_para.add_run(title)
     run.font.size = Pt(14)
     run.bold = True
-    
+
+
+def generate_docx(df, title, is_judge_sheet=False, prog_row=None):
+    doc = Document()
+    add_doc_header(doc, title)
+
     if is_judge_sheet and prog_row is not None:
         pdate = prog_row.get('date', '__________')
         ptime = prog_row.get('time', '__________')
@@ -108,31 +94,29 @@ def generate_docx(df, title, is_judge_sheet=False, prog_row=None):
 
 def get_winners_df(event_mode, prog_id=None):
     import re
-    df_scores = run_query("SELECT * FROM scores WHERE position IN (1, 2, 3)")
-    if df_scores.empty: return pd.DataFrame()
-    
+    query = """
+        SELECT s.*, COALESCE(s.chest_number, st.chest_number) AS Extracted_Chest
+        FROM scores s
+        JOIN programs p ON p.id = s.program_id
+        LEFT JOIN students st ON st.id = s.student_id
+        WHERE s.position IN (1, 2, 3) AND p.event_mode = ?
+    """
+    params = [event_mode]
     if prog_id is not None:
-        df_scores = df_scores[df_scores['program_id'] == prog_id]
-        if df_scores.empty: return pd.DataFrame()
-        
-    def extract_chest(val):
-        m = re.search(r'\(Chest:\s*(\d+)\)', str(val))
-        return int(m.group(1)) if m else None
-        
-    df_scores['Extracted_Chest'] = df_scores['student_or_group_leader'].apply(extract_chest)
-    
-    # Query updated to fetch division natively
-    df_students = run_query("SELECT chest_number, name, class_name, division, category, group_name FROM students")
-    df_merged = pd.merge(df_scores, df_students, left_on='Extracted_Chest', right_on='chest_number', how='left', suffixes=('_score', '_student'))
-    
+        query += " AND s.program_id = ?"
+        params.append(int(prog_id))
+    df_scores = run_query(query, tuple(params))
+    if df_scores.empty: return pd.DataFrame()
+
+    df_students = run_query("SELECT id AS sid, chest_number, name, class_name, division, category, group_name FROM students")
+    df_merged = pd.merge(df_scores, df_students, left_on='student_id', right_on='sid', how='left', suffixes=('_score', '_student'))
+
     df_programs = run_query("SELECT id, name, category as prog_category, gender, type, stage_type FROM programs WHERE event_mode = ?", (event_mode,))
     df_merged = pd.merge(df_merged, df_programs, left_on='program_id', right_on='id', how='left', suffixes=('', '_prog'))
-    
-    # Drop rows where there's no program match (because of event_mode exclusion)
-    df_merged = df_merged.dropna(subset=['id'])
-    
+    df_merged = df_merged.dropna(subset=['id_prog'])
+
     def get_clean_name(row):
-        if pd.notna(row.get('name_student')): return row['name_student']
+        if pd.notna(row.get('name')): return row['name']
         s = str(row['student_or_group_leader'])
         return re.sub(r'\s*\(Chest:.*\)', '', s)
         
@@ -179,18 +163,7 @@ def get_checklist_df(event_mode, sort_mode='Category'):
 
 def generate_winners_docx(df_filtered):
     doc = Document()
-    
-    header_para = doc.add_paragraph()
-    header_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = header_para.add_run("Tournament\n")
-    run.font.size = Pt(16)
-    run.bold = True
-    run = header_para.add_run("Annual Sports Day\n\n")
-    run.font.size = Pt(12)
-    run = header_para.add_run("Winners List\n")
-    run.font.size = Pt(14)
-    run.bold = True
-    
+    add_doc_header(doc, "Winners List")
     doc.add_paragraph()
 
     req_cols = ["Chest Number", "Student Name", "Group Name", "Class", "Division", "Position"]
@@ -226,8 +199,7 @@ def generate_winners_docx(df_filtered):
 
 def render():
     current_mode = st.session_state.get('event_mode', 'Sports')
-    st.title(f"🖨️ Downloads & Prints ({current_mode})")
-    st.markdown("Generate and download specific sheets for the sports event, such as Judges' Scoring Sheets and Groupwise Participant Lists.")
+    hero(f"Downloads & Prints ({current_mode})", "Judges' scoring sheets, groupwise lists, winners books and coordinator checklists.", "🖨️")
 
     tab1, tab2, tab3, tab4 = st.tabs(["📝 Judges' Scoring Sheets", "🏆 Groupwise Final Lists", "🏅 Winners List", "📋 Coordinator Checklist"])
 
@@ -322,7 +294,7 @@ def render():
                             df_participants['Remarks'] = ''
                             
                             st.success("Scoring sheet generated!")
-                            st.dataframe(df_participants, use_container_width=True, hide_index=True)
+                            st.dataframe(df_participants, width="stretch", hide_index=True)
                             
                             csv = df_participants.to_csv(index=False).encode('utf-8')
                             docx_bytes = generate_docx(df_participants, f"Judges Scoring Sheet: {prog_dict['name']} ({selected_category})", is_judge_sheet=True, prog_row=prog_dict)
@@ -367,7 +339,7 @@ def render():
                             df_groups['Remarks'] = ''
                             
                             st.success("Scoring sheet generated!")
-                            st.dataframe(df_groups, use_container_width=True, hide_index=True)
+                            st.dataframe(df_groups, width="stretch", hide_index=True)
                             
                             csv = df_groups.to_csv(index=False).encode('utf-8')
                             docx_bytes = generate_docx(df_groups, f"Judges Scoring Sheet: {prog_dict['name']} ({selected_category})", is_judge_sheet=True, prog_row=prog_dict)
@@ -405,7 +377,8 @@ def render():
             st.warning("No groups found. Please add them in Settings or Upload Data.")
         else:
             selected_group = st.selectbox("Select Group", groups_list, key="final_list_grp")
-            selected_student_gender = st.selectbox("Select Gender Filter", ["All", "Boys", "Girls"], key="final_list_gender")
+            gender_opts = ["All"] + run_query("SELECT name FROM genders")['name'].tolist()
+            selected_student_gender = st.selectbox("Select Gender Filter", gender_opts, key="final_list_gender")
             
             if st.button("Generate Groupwise List", key="btn_gen_grouplist"):
                 
@@ -495,7 +468,7 @@ def render():
                     st.success(f"Groupwise lists generated for {selected_group} ({selected_student_gender})!")
                     
                     st.markdown("### Preview (With Schedule)")
-                    st.dataframe(df_scheduled, use_container_width=True, hide_index=True)
+                    st.dataframe(df_scheduled, width="stretch", hide_index=True)
                     
                     st.markdown("---")
                     st.markdown("#### Option 1: Standard Groupwise List (No Schedule)")
@@ -566,7 +539,7 @@ def render():
                 if current_mode == 'Arts':
                     display_df.insert(4, 'Stage Type', df_all_winners['Stage Type'])
                     
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
+                st.dataframe(display_df, width="stretch", hide_index=True)
                 
                 csv_m = df_all_winners.to_csv(index=False).encode('utf-8')
                 docx_m = generate_winners_docx(df_all_winners)
@@ -590,7 +563,7 @@ def render():
                 st.warning("No programs have been registered in the system.")
             else:
                 st.success("Checklist generated successfully!")
-                st.dataframe(df_check, use_container_width=True, hide_index=True)
+                st.dataframe(df_check, width="stretch", hide_index=True)
                 
                 csv_c = df_check.to_csv(index=False).encode('utf-8')
                 docx_c = generate_docx(df_check, f"Coordinator Event Checklist ({sort_val} Sort)")
